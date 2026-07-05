@@ -130,9 +130,13 @@ impl Session {
                     self.pos += 1;
                     self.accept(c, now, model);
                 } else {
-                    // Still unresolved; count the previous mismatch and keep
-                    // waiting on the new key.
+                    // A second unclassifiable key: commit the first mismatch
+                    // as a substitution for `expected` (advancing past it) and
+                    // leave the new key pending against the following position,
+                    // rather than parking the cursor here indefinitely.
                     self.record_error(ErrorKind::Substitution, wrong, expected, model);
+                    self.typed.push(false);
+                    self.pos += 1;
                     self.pending = Some(c);
                 }
             } else if c == expected {
@@ -148,9 +152,13 @@ impl Session {
                 self.pos += 1;
                 self.accept(c, now, model);
             } else {
-                // Still unresolved; count the previous mismatch as a
-                // substitution attempt and keep waiting on the new key.
+                // A second unclassifiable key: commit the first mismatch as a
+                // substitution for `expected` (advancing past it) and leave the
+                // new key pending against the following position, rather than
+                // parking the cursor here indefinitely.
                 self.record_error(ErrorKind::Substitution, wrong, expected, model);
+                self.typed.push(false);
+                self.pos += 1;
                 self.pending = Some(c);
             }
             return;
@@ -307,6 +315,24 @@ mod tests {
         assert!(s.done());
         assert_eq!(s.typed, vec![true, false, true]);
         assert_eq!(s.last_error.unwrap().kind, ErrorKind::Substitution);
+    }
+
+    #[test]
+    fn consecutive_mismatches_commit_and_advance() {
+        // Two unclassifiable wrong keys before the correct one: the first is
+        // committed as a substitution and the cursor advances instead of
+        // parking, so the second is pending against the *next* position.
+        let mut m = Model::default();
+        let mut s = Session::new("cat".into());
+        feed(&mut s, &mut m, "cq"); // 'q' mismatches 'a', now pending
+        assert_eq!(s.pos, 1);
+        feed(&mut s, &mut m, "z"); // second unclassifiable key
+        assert_eq!(s.substitutions, 1); // first mismatch committed
+        assert_eq!(s.pos, 2); // advanced past 'a'
+        assert_eq!(s.pending, Some('z')); // 'z' now pending against 't'
+        feed(&mut s, &mut m, "t"); // 'z' was an extra key before 't'
+        assert!(s.done());
+        assert_eq!(s.typed, vec![true, false, true]);
     }
 
     #[test]
