@@ -76,11 +76,13 @@ impl App {
         self.model.recenter_biases();
         save_model(&self.model);
 
-        (self.last_delta_wpm, self.last_delta_acc) =
-            self.session.normalized_deltas(&self.model, &self.corpus.digram_freqs);
+        (self.last_delta_wpm, self.last_delta_acc) = self
+            .session
+            .normalized_deltas(&self.model, &self.corpus.digram_freqs);
 
         self.session = Session::new(
-            self.corpus.generate_lesson(&self.model, WORDS_PER_LESSON, &mut self.rng),
+            self.corpus
+                .generate_lesson(&self.model, WORDS_PER_LESSON, &mut self.rng),
             &self.model,
             &self.corpus.digram_freqs,
         );
@@ -89,7 +91,9 @@ impl App {
     /// Returns false when the app should exit.
     fn handle_event(&mut self, ev: Event) -> bool {
         match ev {
-            Event::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
+            Event::Key(key)
+                if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+            {
                 self.dirty = true;
                 match key.code {
                     KeyCode::Esc => return false,

@@ -6,12 +6,12 @@
 use crate::corpus::Corpus;
 use crate::model::Model;
 use crate::session::Session;
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
-use ratatui::Frame;
 
 /// Map a speed in ms to a heatmap color (fast=green .. slow=red).
 fn speed_color(ms: f64) -> Color {
@@ -39,23 +39,35 @@ pub fn draw(
     delta_wpm: f64,
     delta_acc: f64,
 ) {
-    let [header, _, lesson, _, errors, focus, _, heatmap, _, biases, _, footer] =
-        Layout::vertical([
-            Constraint::Length(2), // header (current stats + per-lesson deltas)
-            Constraint::Length(1),
-            Constraint::Length(4), // lesson (wraps)
-            Constraint::Length(1),
-            Constraint::Length(1), // error readout
-            Constraint::Length(1), // focus pairs
-            Constraint::Length(1),
-            Constraint::Length(4), // heatmap (keys, wpm, accuracy)
-            Constraint::Length(1),
-            Constraint::Length(2), // biases
-            Constraint::Fill(1),
-            Constraint::Length(1), // footer
-        ])
-        .horizontal_margin(1)
-        .areas(frame.area());
+    let [
+        header,
+        _,
+        lesson,
+        _,
+        errors,
+        focus,
+        _,
+        heatmap,
+        _,
+        biases,
+        _,
+        footer,
+    ] = Layout::vertical([
+        Constraint::Length(2), // header (current stats + per-lesson deltas)
+        Constraint::Length(1),
+        Constraint::Length(4), // lesson (wraps)
+        Constraint::Length(1),
+        Constraint::Length(1), // error readout
+        Constraint::Length(1), // focus pairs
+        Constraint::Length(1),
+        Constraint::Length(4), // heatmap (keys, wpm, accuracy)
+        Constraint::Length(1),
+        Constraint::Length(2), // biases
+        Constraint::Fill(1),
+        Constraint::Length(1), // footer
+    ])
+    .horizontal_margin(1)
+    .areas(frame.area());
 
     frame.render_widget(
         StatsBar {
@@ -156,23 +168,23 @@ pub struct StatsBar<'a> {
 /// aligned (e.g. `wpm_val` and `wpm_delta` line up) without needing to keep
 /// two separate arrays in sync by hand.
 const STATS_BAR_COLUMNS: [Constraint; 11] = [
-    Constraint::Length(8),  // title
-    Constraint::Length(5),  // "  wpm"
-    Constraint::Length(5),  // wpm value
-    Constraint::Length(6),  // "   raw"
-    Constraint::Length(5),  // raw wpm value
-    Constraint::Length(6),  // "   acc"
-    Constraint::Length(6),  // acc value (% included)
-    Constraint::Length(6),  // "   raw"
-    Constraint::Length(6),  // raw acc value (% included)
-    Constraint::Length(6),  // "   obs"
-    Constraint::Min(0),     // obs value
+    Constraint::Length(8), // title
+    Constraint::Length(5), // "  wpm"
+    Constraint::Length(5), // wpm value
+    Constraint::Length(6), // "   raw"
+    Constraint::Length(5), // raw wpm value
+    Constraint::Length(6), // "   acc"
+    Constraint::Length(6), // acc value (% included)
+    Constraint::Length(6), // "   raw"
+    Constraint::Length(6), // raw acc value (% included)
+    Constraint::Length(6), // "   obs"
+    Constraint::Min(0),    // obs value
 ];
 
 impl Widget for StatsBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let [row1, row2] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-            .areas(area);
+        let [row1, row2] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
 
         let [
             title,
@@ -306,7 +318,10 @@ impl Widget for KeyHeatmap<'_> {
         for c in 'a'..='z' {
             let ms = self.model.key_speed(c, &self.corpus.digram_freqs);
             let acc = self.model.key_accuracy(c, &self.corpus.digram_freqs);
-            keys.push(Span::styled(format!("{c}   "), Style::new().fg(speed_color(ms))));
+            keys.push(Span::styled(
+                format!("{c}   "),
+                Style::new().fg(speed_color(ms)),
+            ));
             wpms.push(Span::styled(
                 format!("{:<4.0}", ms_to_wpm(ms)),
                 Style::new().fg(speed_color(ms)),
@@ -316,8 +331,13 @@ impl Widget for KeyHeatmap<'_> {
                 Style::new().fg(accuracy_color(acc)),
             ));
         }
-        Paragraph::new(vec![title, Line::from(keys), Line::from(wpms), Line::from(accs)])
-            .render(area, buf);
+        Paragraph::new(vec![
+            title,
+            Line::from(keys),
+            Line::from(wpms),
+            Line::from(accs),
+        ])
+        .render(area, buf);
     }
 }
 

@@ -209,7 +209,11 @@ impl Session {
             ErrorKind::Substitution => self.substitutions += 1,
             ErrorKind::Reversal => self.reversals += 1,
         }
-        self.last_error = Some(ErrorEvent { kind, got, expected });
+        self.last_error = Some(ErrorEvent {
+            kind,
+            got,
+            expected,
+        });
         match kind {
             // A reversal is an ordering failure of the expected->next
             // transition itself (got == next here).
@@ -253,7 +257,11 @@ impl Session {
     }
 
     /// Change in normalized WPM and accuracy since this lesson started.
-    pub fn normalized_deltas(&self, model: &Model, freqs: &HashMap<(char, char), f64>) -> (f64, f64) {
+    pub fn normalized_deltas(
+        &self,
+        model: &Model,
+        freqs: &HashMap<(char, char), f64>,
+    ) -> (f64, f64) {
         (
             model.normalized_wpm(freqs) - self.start_wpm,
             model.normalized_accuracy(freqs) - self.start_acc,
@@ -373,7 +381,10 @@ mod tests {
         feed(&mut s, &mut m, "cxt"); // substitution at the c->a transition
         let acc_ca = m.pair_accuracy('c', 'a');
         let acc_at = m.pair_accuracy('a', 't');
-        assert!(acc_ca < acc_at, "c->a should be less accurate ({acc_ca} vs {acc_at})");
+        assert!(
+            acc_ca < acc_at,
+            "c->a should be less accurate ({acc_ca} vs {acc_at})"
+        );
         assert!(s.raw_accuracy() < 1.0);
     }
 
@@ -393,6 +404,9 @@ mod tests {
         let (dwpm, dacc) = s.normalized_deltas(&m, &freqs);
         assert!(dwpm > 0.0, "wpm delta should be positive after speeding up");
         // Accuracy prior is high; no errors were recorded, so it should rise slightly.
-        assert!(dacc >= 0.0, "accuracy delta should be non-negative with no errors");
+        assert!(
+            dacc >= 0.0,
+            "accuracy delta should be non-negative with no errors"
+        );
     }
 }

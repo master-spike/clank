@@ -39,7 +39,12 @@ pub struct PairStat {
 
 impl Default for PairStat {
     fn default() -> Self {
-        PairStat { s: BASELINE_MS, n: 0, ok: 0, err: 0 }
+        PairStat {
+            s: BASELINE_MS,
+            n: 0,
+            ok: 0,
+            err: 0,
+        }
     }
 }
 
@@ -99,8 +104,7 @@ impl Model {
 
         // Pair speed fits the bias-corrected interval: s -> E[dt] - b_a + b_b.
         let stat = self.pairs.entry(pair_key(a, b)).or_default();
-        let err_pair =
-            (dt_ms - (stat.s + b_a - b_b)).clamp(-RESIDUAL_CLAMP_MS, RESIDUAL_CLAMP_MS);
+        let err_pair = (dt_ms - (stat.s + b_a - b_b)).clamp(-RESIDUAL_CLAMP_MS, RESIDUAL_CLAMP_MS);
         // Count-based learning rate with a floor, so early observations move
         // the estimate quickly and later ones refine it.
         let lr = (1.0 / (stat.n as f64 + 1.0)).max(LR_FLOOR);
@@ -250,11 +254,8 @@ mod tests {
     fn bias_invariance() {
         // Two datasets identical except key 'x' fires 50ms late everywhere.
         // Intrinsic pair speeds should come out (nearly) the same.
-        let base: Vec<(char, char, f64)> = vec![
-            ('a', 'x', 150.0),
-            ('x', 'b', 150.0),
-            ('b', 'a', 150.0),
-        ];
+        let base: Vec<(char, char, f64)> =
+            vec![('a', 'x', 150.0), ('x', 'b', 150.0), ('b', 'a', 150.0)];
         let shifted: Vec<(char, char, f64)> = vec![
             ('a', 'x', 200.0), // interval ending at x grows by 50
             ('x', 'b', 100.0), // interval starting at x shrinks by 50

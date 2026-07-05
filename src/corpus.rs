@@ -63,7 +63,11 @@ impl Corpus {
             *v /= total;
         }
 
-        Corpus { words, digram_freqs, index }
+        Corpus {
+            words,
+            digram_freqs,
+            index,
+        }
     }
 
     /// Effective time cost of practicing errors into account: an error costs
@@ -239,10 +243,7 @@ mod tests {
         let mut q_adaptive = 0;
         let mut q_uniform = 0;
         for _ in 0..50 {
-            q_adaptive += c
-                .generate_lesson(&model, 10, &mut rng)
-                .matches('q')
-                .count();
+            q_adaptive += c.generate_lesson(&model, 10, &mut rng).matches('q').count();
             let uniform: Vec<&&str> = c.words.choose_multiple(&mut rng, 10).collect();
             q_uniform += uniform.iter().filter(|w| w.contains('q')).count();
         }
@@ -281,9 +282,15 @@ mod focus_tests {
         let mut th_lesson = 0;
         let mut th_uniform = 0;
         for _ in 0..50 {
-            th_lesson += c.generate_lesson(&model, 10, &mut rng).matches("th").count();
+            th_lesson += c
+                .generate_lesson(&model, 10, &mut rng)
+                .matches("th")
+                .count();
             let uniform: Vec<&&str> = c.words.choose_multiple(&mut rng, 10).collect();
-            th_uniform += uniform.iter().map(|w| w.matches("th").count()).sum::<usize>();
+            th_uniform += uniform
+                .iter()
+                .map(|w| w.matches("th").count())
+                .sum::<usize>();
         }
         assert!(
             th_lesson > th_uniform * 2,
