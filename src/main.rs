@@ -28,8 +28,16 @@ fn load_model() -> Model {
 }
 
 fn save_model(model: &Model) {
-    if let Ok(json) = serde_json::to_string(model) {
-        std::fs::write(state_path(), json).ok();
+    let Ok(json) = serde_json::to_string(model) else {
+        return;
+    };
+    // Write to a temp file and rename over the target so an interrupted write
+    // can never truncate/corrupt an existing model (rename is atomic on the
+    // same filesystem).
+    let path = state_path();
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, json).is_ok() {
+        std::fs::rename(&tmp, &path).ok();
     }
 }
 
@@ -90,6 +98,15 @@ impl App {
 
 fn main() -> std::io::Result<()> {
     let mut app = App::new();
+
+    // Ensure the terminal is restored even if a later panic unwinds past the
+    // normal cleanup path, so the user's shell isn't left in raw mode.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        ratatui::restore();
+        default_hook(info);
+    }));
+
     let mut terminal = ratatui::init();
 
     let result = (|| -> std::io::Result<()> {
