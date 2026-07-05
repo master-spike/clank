@@ -135,6 +135,13 @@ impl Model {
         }
     }
 
+    /// Raw (ok, err) attempt counts for a transition.
+    pub fn pair_attempts(&self, a: char, b: char) -> (u32, u32) {
+        self.pairs
+            .get(&pair_key(a, b))
+            .map_or((0, 0), |st| (st.ok, st.err))
+    }
+
     /// Prior-blended accuracy estimate for a transition in [0, 1].
     pub fn pair_accuracy(&self, a: char, b: char) -> f64 {
         let (ok, err) = self

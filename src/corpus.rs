@@ -19,6 +19,11 @@ pub const FOCUS_K: usize = 5;
 /// Uncertainty boost: pairs with few observations get their sampling weight
 /// inflated by up to this factor.
 const UNCERTAINTY_BOOST: f64 = 1.5;
+/// Approximate time cost of making an error (notice + correct), used to fold
+/// accuracy into a pair's effective practice payoff.
+const ERROR_PENALTY_MS: f64 = 750.0;
+/// Pseudo-count blending pair-level accuracy toward its key-level prior.
+const ACC_HIER_N: f64 = 5.0;
 
 pub struct Corpus {
     pub words: Vec<&'static str>,
@@ -61,17 +66,45 @@ impl Corpus {
         Corpus { words, digram_freqs, index }
     }
 
+    /// Effective time cost of practicing errors into account: an error costs
+    /// roughly this long to notice and correct, so a pair's effective cost is
+    /// speed + error_rate x penalty.
+    fn effective_cost(&self, model: &Model, a: char, b: char, key_acc: &[f64; 26]) -> f64 {
+        // Hierarchical accuracy: the pair's prior is the WORSE of its two
+        // keys' aggregate accuracies, so sparsely-observed pairs inherit a
+        // known problem key (e.g. a struggling 'x') instead of being pulled
+        // toward a global optimistic prior.
+        let idx = |c: char| (c as u8 - b'a') as usize;
+        let prior = key_acc[idx(a)].min(key_acc[idx(b)]);
+        let (ok, err) = model.pair_attempts(a, b);
+        let acc = (ok as f64 + prior * ACC_HIER_N) / ((ok + err) as f64 + ACC_HIER_N);
+        model.pair_speed(a, b) + (1.0 - acc) * ERROR_PENALTY_MS
+    }
+
+    fn key_accuracies(&self, model: &Model) -> [f64; 26] {
+        let mut acc = [1.0; 26];
+        for (i, c) in ('a'..='z').enumerate() {
+            acc[i] = model.key_accuracy(c, &self.digram_freqs);
+        }
+        acc
+    }
+
     /// Rank digrams by expected payoff of practicing them: population
-    /// frequency (softened by sqrt so rare pairs still surface) x speed
-    /// deficit vs the learner's overall mean x uncertainty boost. Returns the
-    /// top `k` with their scores; empty when nothing is measurably slow yet.
+    /// frequency (softened by sqrt so rare pairs still surface) x effective
+    /// cost deficit (speed AND error rate) vs the learner's overall mean x
+    /// uncertainty boost. Returns the top `k` with their scores; empty when
+    /// nothing is measurably weak yet.
     pub fn focus_pairs(&self, model: &Model, k: usize) -> Vec<((char, char), f64)> {
         let mu = model.normalized_interval_ms(&self.digram_freqs);
+        let key_acc = self.key_accuracies(model);
         let mut scored: Vec<((char, char), f64)> = self
             .digram_freqs
             .iter()
             .filter_map(|(&pair, &f)| {
-                let deficit = model.pair_speed(pair.0, pair.1) - mu;
+                if !pair.0.is_ascii_lowercase() || !pair.1.is_ascii_lowercase() {
+                    return None;
+                }
+                let deficit = self.effective_cost(model, pair.0, pair.1, &key_acc) - mu;
                 if deficit <= 0.0 {
                     return None;
                 }
@@ -86,16 +119,17 @@ impl Corpus {
     }
 
     /// Difficulty score of a word: mean sampling weight of its digrams, where
-    /// weight grows with estimated intrinsic pair cost and with uncertainty.
-    fn word_score(&self, word: &str, model: &Model) -> f64 {
+    /// weight grows with effective pair cost (speed and error rate) and with
+    /// uncertainty.
+    fn word_score(&self, word: &str, model: &Model, key_acc: &[f64; 26]) -> f64 {
         let chars: Vec<char> = word.chars().collect();
         let mut sum = 0.0;
         let mut n = 0.0;
         for pair in chars.windows(2) {
-            let s = model.pair_speed(pair[0], pair[1]);
+            let cost = self.effective_cost(model, pair[0], pair[1], key_acc);
             let count = model.pair_count(pair[0], pair[1]) as f64;
             let boost = 1.0 + (UNCERTAINTY_BOOST - 1.0) / (1.0 + count / 5.0);
-            sum += s * boost;
+            sum += cost * boost;
             n += 1.0;
         }
         if n > 0.0 { sum / n } else { 0.0 }
@@ -112,11 +146,15 @@ impl Corpus {
         let focus_total: f64 = focus.iter().map(|(_, s)| s).sum();
 
         // Score a random candidate pool rather than all 10k words per lesson.
+        let key_acc = self.key_accuracies(model);
         let pool: Vec<&&str> = self
             .words
             .choose_multiple(rng, 400.min(self.words.len()))
             .collect();
-        let scores: Vec<f64> = pool.iter().map(|w| self.word_score(w, model)).collect();
+        let scores: Vec<f64> = pool
+            .iter()
+            .map(|w| self.word_score(w, model, &key_acc))
+            .collect();
         let mean = scores.iter().sum::<f64>() / scores.len() as f64;
 
         // Softmax-ish weights relative to the mean difficulty.
@@ -252,6 +290,45 @@ mod focus_tests {
             "lesson 'th' count {} vs uniform {}",
             th_lesson,
             th_uniform
+        );
+    }
+}
+
+#[cfg(test)]
+mod accuracy_focus_tests {
+    use super::*;
+
+    #[test]
+    fn error_prone_key_gets_focus_despite_normal_speed() {
+        let c = Corpus::load();
+        let mut model = Model::default();
+        // Uniform speed everywhere; transitions involving 'x' are error-prone.
+        for (a, b) in c.digram_freqs.keys() {
+            for i in 0..20 {
+                model.observe(*a, *b, 150.0);
+                let err_prone = *a == 'x' || *b == 'x';
+                model.record_attempt(*a, *b, !(err_prone && i % 4 == 0)); // 25% errors on x
+            }
+        }
+        let focus = c.focus_pairs(&model, FOCUS_K);
+        assert!(
+            focus.iter().any(|((a, b), _)| *a == 'x' || *b == 'x'),
+            "x pairs missing from focus: {focus:?}"
+        );
+
+        let mut rng = rand::rng();
+        let mut x_lesson = 0;
+        let mut x_uniform = 0;
+        for _ in 0..50 {
+            x_lesson += c.generate_lesson(&model, 10, &mut rng).matches('x').count();
+            let uniform: Vec<&&str> = c.words.choose_multiple(&mut rng, 10).collect();
+            x_uniform += uniform.iter().filter(|w| w.contains('x')).count();
+        }
+        assert!(
+            x_lesson > x_uniform * 2,
+            "lesson 'x' count {} vs uniform {}",
+            x_lesson,
+            x_uniform
         );
     }
 }

@@ -106,10 +106,14 @@ the timing chain so no fabricated interval pollutes the speed model.
 
 ### Adaptive lessons
 
-Digrams are ranked by expected payoff of practice:
+Digrams are ranked by expected payoff of practice, where a pair's cost counts
+both its speed and its error rate (an error is charged a fixed time penalty,
+and sparse pairs inherit the accuracy of their worse key as a prior — so a
+letter you mistype often gets drilled even if its pairs are individually rare):
 
 ```
-payoff = √(population frequency) × speed deficit vs your mean × uncertainty boost
+effective cost = speed + error rate × penalty
+payoff = √(population frequency) × effective-cost deficit vs your mean × uncertainty boost
 ```
 
 Lessons are sampled as a mix: 50% words containing a current focus pair (via
