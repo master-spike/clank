@@ -59,8 +59,8 @@ impl Widget for ErrorBar<'_> {
         let s = self.session;
         let mut spans = vec![Span::styled("errors: ", Style::new().fg(Color::DarkGray))];
         spans.push(Span::raw(format!(
-            "extra {}  skipped {}  typo {}   ",
-            s.insertions, s.omissions, s.substitutions
+            "extra {}  skipped {}  typo {}  swap {}   ",
+            s.insertions, s.omissions, s.substitutions, s.reversals
         )));
         if let Some(ev) = &s.last_error {
             let desc = match ev.kind {
@@ -72,6 +72,9 @@ impl Widget for ErrorBar<'_> {
                 }
                 crate::session::ErrorKind::Substitution => {
                     format!("last: typo '{}' for '{}'", ev.got, ev.expected)
+                }
+                crate::session::ErrorKind::Reversal => {
+                    format!("last: swapped '{}{}'", ev.expected, ev.got)
                 }
             };
             spans.push(Span::styled(desc, Style::new().fg(Color::Yellow)));

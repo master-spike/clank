@@ -3,10 +3,12 @@
 //!
 //! Error handling is "strict": the cursor does not advance past a position
 //! until it is resolved, which is what makes real-time error classification
-//! well-defined. A mismatched keystroke is classified with one-key lookahead:
-//! - wrong char == next expected char        -> omission (a letter was skipped)
-//! - wrong char, then the expected char      -> insertion (an extra letter was hit)
-//! - wrong char, then the char after next    -> substitution (typed one letter for another)
+//! well-defined. A mismatched keystroke is classified with one-key lookahead
+//! (expected `e`, next `n`, then `n2`):
+//! - wrong `w`, then `e`  (w != n)  -> insertion (an extra letter was hit)
+//! - wrong `w`, then `n`            -> substitution (typed `w` in place of `e`)
+//! - wrong `w == n`, then `e`       -> reversal (typed `n` and `e` swapped)
+//! - wrong `w == n`, then `n2`      -> omission (`e` was skipped)
 
 use crate::model::{Model, PAUSE_THRESHOLD_MS};
 use std::time::Instant;
@@ -19,6 +21,8 @@ pub enum ErrorKind {
     Omission,
     /// A different letter was typed in place of the expected one.
     Substitution,
+    /// Two adjacent letters were typed in swapped order.
+    Reversal,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -40,6 +44,7 @@ pub struct Session {
     pub insertions: u64,
     pub omissions: u64,
     pub substitutions: u64,
+    pub reversals: u64,
     /// Correctly typed characters (attempt successes).
     correct: u64,
     last_key: Option<(char, Instant)>,
@@ -61,6 +66,7 @@ impl Session {
             insertions: 0,
             omissions: 0,
             substitutions: 0,
+            reversals: 0,
             correct: 0,
             last_key: None,
             session_chars: 0,
@@ -73,7 +79,7 @@ impl Session {
     }
 
     pub fn errors(&self) -> u64 {
-        self.insertions + self.omissions + self.substitutions
+        self.insertions + self.omissions + self.substitutions + self.reversals
     }
 
     /// Raw session accuracy in [0, 1]: correct keystrokes over attempts.
@@ -94,7 +100,42 @@ impl Session {
         let now = Instant::now();
 
         if let Some(wrong) = self.pending {
-            if c == expected {
+            let next2 = self.lesson.get(self.pos + 2).copied();
+            if Some(wrong) == next {
+                // The mismatch matched the NEXT expected char: ambiguous
+                // between reversal, omission, and substitution until now.
+                if c == expected {
+                    // w == n then e: adjacent letters typed in swapped order.
+                    self.record_error(ErrorKind::Reversal, wrong, expected, model);
+                    self.pending = None;
+                    self.typed.push(false);
+                    self.typed.push(false);
+                    self.pos += 2;
+                    // `c` is a real keystroke; the timing chain restarts here.
+                    self.last_key = Some((c, now));
+                } else if next2 == Some(c) {
+                    // w == n then n2: `e` was genuinely skipped.
+                    self.record_error(ErrorKind::Omission, wrong, expected, model);
+                    self.pending = None;
+                    self.typed.push(false);
+                    self.typed.push(true); // `n` was typed correctly (as `w`)
+                    self.correct += 1;
+                    self.pos += 2;
+                    self.accept(c, now, model);
+                } else if next == Some(c) {
+                    // w == n then n again: `w` replaced `e`.
+                    self.record_error(ErrorKind::Substitution, wrong, expected, model);
+                    self.pending = None;
+                    self.typed.push(false);
+                    self.pos += 1;
+                    self.accept(c, now, model);
+                } else {
+                    // Still unresolved; count the previous mismatch and keep
+                    // waiting on the new key.
+                    self.record_error(ErrorKind::Substitution, wrong, expected, model);
+                    self.pending = Some(c);
+                }
+            } else if c == expected {
                 // wrong, then expected: the wrong char was an extra keystroke.
                 self.record_error(ErrorKind::Insertion, wrong, expected, model);
                 self.pending = None;
@@ -117,14 +158,9 @@ impl Session {
 
         if c == expected {
             self.accept(expected, now, model);
-        } else if next == Some(c) {
-            // Typed the next expected char: the expected one was skipped.
-            self.record_error(ErrorKind::Omission, c, expected, model);
-            self.typed.push(false);
-            self.pos += 1;
-            self.accept(c, now, model);
         } else {
-            // Unknown yet: insertion or substitution. Classify on next key.
+            // Any mismatch — including one matching the next expected char —
+            // is ambiguous until the following key; classify then.
             self.pending = Some(c);
             self.last_key = None; // exclude intervals adjacent to errors
         }
@@ -157,13 +193,25 @@ impl Session {
             ErrorKind::Insertion => self.insertions += 1,
             ErrorKind::Omission => self.omissions += 1,
             ErrorKind::Substitution => self.substitutions += 1,
+            ErrorKind::Reversal => self.reversals += 1,
         }
         self.last_error = Some(ErrorEvent { kind, got, expected });
-        // Attribute the error to the transition into the expected char.
-        if self.pos > 0 {
-            let prev = self.lesson[self.pos - 1];
-            if prev.is_ascii_lowercase() && expected.is_ascii_lowercase() {
-                model.record_attempt(prev, expected, false);
+        match kind {
+            // A reversal is an ordering failure of the expected->next
+            // transition itself (got == next here).
+            ErrorKind::Reversal => {
+                if expected.is_ascii_lowercase() && got.is_ascii_lowercase() {
+                    model.record_attempt(expected, got, false);
+                }
+            }
+            // Other errors count against the transition into the expected char.
+            _ => {
+                if self.pos > 0 {
+                    let prev = self.lesson[self.pos - 1];
+                    if prev.is_ascii_lowercase() && expected.is_ascii_lowercase() {
+                        model.record_attempt(prev, expected, false);
+                    }
+                }
             }
         }
         self.last_key = None; // exclude intervals adjacent to errors
@@ -216,12 +264,38 @@ mod tests {
     #[test]
     fn classifies_omission() {
         let mut m = Model::default();
-        let mut s = Session::new("cat".into());
-        feed(&mut s, &mut m, "ct"); // skipped the 'a'
+        let mut s = Session::new("cats".into());
+        feed(&mut s, &mut m, "cts"); // skipped the 'a', kept going
         assert_eq!(s.omissions, 1);
         assert!(s.done());
-        assert_eq!(s.typed, vec![true, false, true]);
+        assert_eq!(s.typed, vec![true, false, true, true]);
         assert_eq!(s.last_error.unwrap().kind, ErrorKind::Omission);
+    }
+
+    #[test]
+    fn classifies_reversal() {
+        let mut m = Model::default();
+        let mut s = Session::new("cat".into());
+        feed(&mut s, &mut m, "cta"); // 'a' and 't' typed in swapped order
+        assert_eq!(s.reversals, 1);
+        assert_eq!(s.errors(), 1);
+        assert!(s.done());
+        assert_eq!(s.typed, vec![true, false, false]);
+        assert_eq!(s.last_error.unwrap().kind, ErrorKind::Reversal);
+    }
+
+    #[test]
+    fn next_char_mismatch_can_still_be_substitution() {
+        let mut m = Model::default();
+        // 't' typed in place of 'a' happens to equal the next expected char;
+        // the repeated 't' disambiguates it as a substitution, not a skip.
+        let mut s = Session::new("cat".into());
+        feed(&mut s, &mut m, "ctt");
+        assert_eq!(s.substitutions, 1);
+        assert_eq!(s.omissions, 0);
+        assert!(s.done());
+        assert_eq!(s.typed, vec![true, false, true]);
+        assert_eq!(s.last_error.unwrap().kind, ErrorKind::Substitution);
     }
 
     #[test]
