@@ -21,10 +21,12 @@ fn speed_color(ms: f64) -> Color {
 
 /// Top-level frame composition: lays out and renders all components.
 pub fn draw(frame: &mut Frame, session: &Session, model: &Model, corpus: &Corpus) {
-    let [header, _, lesson, _, heatmap, _, biases, _, footer] = Layout::vertical([
+    let [header, _, lesson, _, focus, _, heatmap, _, biases, _, footer] = Layout::vertical([
         Constraint::Length(1), // header
         Constraint::Length(1),
         Constraint::Length(4), // lesson (wraps)
+        Constraint::Length(1),
+        Constraint::Length(1), // focus pairs
         Constraint::Length(1),
         Constraint::Length(3), // heatmap
         Constraint::Length(1),
@@ -37,9 +39,42 @@ pub fn draw(frame: &mut Frame, session: &Session, model: &Model, corpus: &Corpus
 
     frame.render_widget(StatsBar { session, model, corpus }, header);
     frame.render_widget(LessonText { session }, lesson);
+    frame.render_widget(FocusBar { model, corpus }, focus);
     frame.render_widget(KeyHeatmap { model, corpus }, heatmap);
     frame.render_widget(BiasReadout { model }, biases);
     frame.render_widget(Footer, footer);
+}
+
+/// The digrams currently being targeted by the lesson scheduler, with their
+/// intrinsic (bias-invariant) speeds.
+pub struct FocusBar<'a> {
+    pub model: &'a Model,
+    pub corpus: &'a Corpus,
+}
+
+impl Widget for FocusBar<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let focus = self.corpus.focus_pairs(self.model, crate::corpus::FOCUS_K);
+        let mut spans = vec![Span::styled("focus: ", Style::new().fg(Color::DarkGray))];
+        if focus.is_empty() {
+            spans.push(Span::styled(
+                "(none yet — keep typing)",
+                Style::new().fg(Color::DarkGray),
+            ));
+        }
+        for ((a, b), _) in &focus {
+            let ms = self.model.pair_speed(*a, *b);
+            spans.push(Span::styled(
+                format!("{a}{b}"),
+                Style::new().fg(speed_color(ms)),
+            ));
+            spans.push(Span::styled(
+                format!(" {ms:.0}ms   "),
+                Style::new().fg(Color::DarkGray),
+            ));
+        }
+        Paragraph::new(Line::from(spans)).render(area, buf);
+    }
 }
 
 /// Header line: normalized WPM (population-weighted, difficulty-invariant),

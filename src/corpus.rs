@@ -9,8 +9,13 @@ use std::collections::HashMap;
 const RAW_WORDS: &str = include_str!("../assets/words.txt");
 
 /// Probability of picking a uniformly random word (exploration floor) instead
-/// of a difficulty-weighted one, keeping coverage across all pairs.
-const EXPLORATION_P: f64 = 0.3;
+/// of a targeted one, keeping coverage across all pairs.
+const EXPLORATION_P: f64 = 0.2;
+/// Probability of picking a word containing one of the current focus pairs
+/// (the learner's highest-payoff struggle digrams).
+const FOCUS_P: f64 = 0.5;
+/// Number of struggle digrams targeted at a time.
+pub const FOCUS_K: usize = 5;
 /// Uncertainty boost: pairs with few observations get their sampling weight
 /// inflated by up to this factor.
 const UNCERTAINTY_BOOST: f64 = 1.5;
@@ -19,6 +24,8 @@ pub struct Corpus {
     pub words: Vec<&'static str>,
     /// Zipf-weighted population digram frequencies (letters only).
     pub digram_freqs: HashMap<(char, char), f64>,
+    /// Inverted index: digram -> indices of words containing it.
+    index: HashMap<(char, char), Vec<u32>>,
 }
 
 impl Corpus {
@@ -30,13 +37,20 @@ impl Corpus {
             .collect();
 
         // The list is frequency-ranked; approximate word frequency by Zipf's
-        // law (1/rank) to build a population digram distribution.
+        // law (1/rank) to build a population digram distribution, and build
+        // an inverted index for targeted lesson generation.
         let mut digram_freqs: HashMap<(char, char), f64> = HashMap::new();
+        let mut index: HashMap<(char, char), Vec<u32>> = HashMap::new();
         for (rank, word) in words.iter().enumerate() {
             let w = 1.0 / (rank as f64 + 1.0);
             let chars: Vec<char> = word.chars().collect();
             for pair in chars.windows(2) {
-                *digram_freqs.entry((pair[0], pair[1])).or_insert(0.0) += w;
+                let key = (pair[0], pair[1]);
+                *digram_freqs.entry(key).or_insert(0.0) += w;
+                let entry = index.entry(key).or_default();
+                if entry.last() != Some(&(rank as u32)) {
+                    entry.push(rank as u32);
+                }
             }
         }
         let total: f64 = digram_freqs.values().sum();
@@ -44,7 +58,31 @@ impl Corpus {
             *v /= total;
         }
 
-        Corpus { words, digram_freqs }
+        Corpus { words, digram_freqs, index }
+    }
+
+    /// Rank digrams by expected payoff of practicing them: population
+    /// frequency (softened by sqrt so rare pairs still surface) x speed
+    /// deficit vs the learner's overall mean x uncertainty boost. Returns the
+    /// top `k` with their scores; empty when nothing is measurably slow yet.
+    pub fn focus_pairs(&self, model: &Model, k: usize) -> Vec<((char, char), f64)> {
+        let mu = model.normalized_interval_ms(&self.digram_freqs);
+        let mut scored: Vec<((char, char), f64)> = self
+            .digram_freqs
+            .iter()
+            .filter_map(|(&pair, &f)| {
+                let deficit = model.pair_speed(pair.0, pair.1) - mu;
+                if deficit <= 0.0 {
+                    return None;
+                }
+                let n = model.pair_count(pair.0, pair.1) as f64;
+                let boost = 1.0 + (UNCERTAINTY_BOOST - 1.0) / (1.0 + n / 5.0);
+                Some((pair, f.sqrt() * deficit * boost))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        scored.truncate(k);
+        scored
     }
 
     /// Difficulty score of a word: mean sampling weight of its digrams, where
@@ -63,10 +101,16 @@ impl Corpus {
         if n > 0.0 { sum / n } else { 0.0 }
     }
 
-    /// Generate a lesson of `n_words`, continuously adaptive: words containing
-    /// slow/uncertain digrams are sampled more often, with an exploration
-    /// floor so nothing drops out of rotation.
+    /// Generate a lesson of `n_words` from a three-way mix:
+    /// - focus draws (FOCUS_P): words containing one of the learner's current
+    ///   focus pairs, sampled proportionally to each pair's payoff score;
+    /// - difficulty draws: softmax-weighted by overall word difficulty;
+    /// - exploration draws (EXPLORATION_P): uniform, so nothing drops out of
+    ///   rotation.
     pub fn generate_lesson<R: Rng>(&self, model: &Model, n_words: usize, rng: &mut R) -> String {
+        let focus = self.focus_pairs(model, FOCUS_K);
+        let focus_total: f64 = focus.iter().map(|(_, s)| s).sum();
+
         // Score a random candidate pool rather than all 10k words per lesson.
         let pool: Vec<&&str> = self
             .words
@@ -84,10 +128,29 @@ impl Corpus {
 
         let mut out: Vec<&str> = Vec::with_capacity(n_words);
         while out.len() < n_words {
-            if rng.random::<f64>() < EXPLORATION_P {
+            let roll = rng.random::<f64>();
+            if roll < EXPLORATION_P {
                 out.push(self.words.choose(rng).unwrap());
                 continue;
             }
+            // Focus draw: pick a struggle digram by payoff, then a word
+            // containing it (Zipf-weighted toward common words).
+            if roll < EXPLORATION_P + FOCUS_P && focus_total > 0.0 {
+                let mut target = rng.random::<f64>() * focus_total;
+                let pair = focus
+                    .iter()
+                    .find(|(_, s)| {
+                        target -= s;
+                        target <= 0.0
+                    })
+                    .map(|(p, _)| *p)
+                    .unwrap_or(focus[0].0);
+                if let Some(word) = self.sample_word_with(pair, rng) {
+                    out.push(word);
+                    continue;
+                }
+            }
+            // Difficulty-weighted draw from the pool.
             let mut target = rng.random::<f64>() * total_w;
             for (i, w) in weights.iter().enumerate() {
                 target -= w;
@@ -98,6 +161,16 @@ impl Corpus {
             }
         }
         out.join(" ")
+    }
+
+    /// Sample a word containing `pair`, weighted toward common words (the
+    /// index is rank-ordered; take a uniformly random prefix position squared
+    /// to skew toward the front).
+    fn sample_word_with<R: Rng>(&self, pair: (char, char), rng: &mut R) -> Option<&'static str> {
+        let ids = self.index.get(&pair)?;
+        let u = rng.random::<f64>();
+        let i = ((u * u) * ids.len() as f64) as usize;
+        Some(self.words[ids[i.min(ids.len() - 1)] as usize])
     }
 }
 
@@ -144,5 +217,41 @@ mod tests {
         // Normalized wpm should reflect population mix, dominated by fast pairs.
         let wpm = model.normalized_wpm(&c.digram_freqs);
         assert!(wpm > 60.0, "normalized wpm was {wpm}");
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[test]
+    fn focus_targets_slow_common_digram() {
+        let c = Corpus::load();
+        let mut model = Model::default();
+        // 'th' is slow, everything else fast.
+        for (a, b) in c.digram_freqs.keys() {
+            let dt = if (*a, *b) == ('t', 'h') { 500.0 } else { 100.0 };
+            for _ in 0..20 {
+                model.observe(*a, *b, dt);
+            }
+        }
+        let focus = c.focus_pairs(&model, FOCUS_K);
+        assert_eq!(focus[0].0, ('t', 'h'), "focus was {:?}", focus);
+
+        // Lessons should contain far more 'th' words than uniform sampling.
+        let mut rng = rand::rng();
+        let mut th_lesson = 0;
+        let mut th_uniform = 0;
+        for _ in 0..50 {
+            th_lesson += c.generate_lesson(&model, 10, &mut rng).matches("th").count();
+            let uniform: Vec<&&str> = c.words.choose_multiple(&mut rng, 10).collect();
+            th_uniform += uniform.iter().map(|w| w.matches("th").count()).sum::<usize>();
+        }
+        assert!(
+            th_lesson > th_uniform * 2,
+            "lesson 'th' count {} vs uniform {}",
+            th_lesson,
+            th_uniform
+        );
     }
 }
