@@ -200,6 +200,20 @@ impl Model {
         if den > 0.0 { num / den } else { BASELINE_MS }
     }
 
+    /// Population-frequency-weighted accuracy of a single key across
+    /// transitions involving it. Used for the per-key accuracy display.
+    pub fn key_accuracy(&self, c: char, freqs: &HashMap<(char, char), f64>) -> f64 {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for (&(a, b), &f) in freqs {
+            if a == c || b == c {
+                num += f * self.pair_accuracy(a, b);
+                den += f;
+            }
+        }
+        if den > 0.0 { num / den } else { ACC_PRIOR }
+    }
+
     pub fn key_bias(&self, c: char) -> f64 {
         *self.biases.get(&c).unwrap_or(&0.0)
     }

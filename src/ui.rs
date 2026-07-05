@@ -19,6 +19,17 @@ fn speed_color(ms: f64) -> Color {
     Color::Rgb((255.0 * t) as u8, (200.0 * (1.0 - t)) as u8 + 55, 40)
 }
 
+/// Map an accuracy in [0,1] to a color (>=99% green .. <=90% red).
+fn accuracy_color(acc: f64) -> Color {
+    let t = ((0.99 - acc) / 0.09).clamp(0.0, 1.0);
+    Color::Rgb((255.0 * t) as u8, (200.0 * (1.0 - t)) as u8 + 55, 40)
+}
+
+/// Convert a per-keystroke interval in ms to WPM (5 chars per word).
+fn ms_to_wpm(ms: f64) -> f64 {
+    60_000.0 / (ms.max(1.0) * 5.0)
+}
+
 /// Top-level frame composition: lays out and renders all components.
 pub fn draw(frame: &mut Frame, session: &Session, model: &Model, corpus: &Corpus) {
     let [header, _, lesson, _, errors, focus, _, heatmap, _, biases, _, footer] =
@@ -30,7 +41,7 @@ pub fn draw(frame: &mut Frame, session: &Session, model: &Model, corpus: &Corpus
             Constraint::Length(1), // error readout
             Constraint::Length(1), // focus pairs
             Constraint::Length(1),
-            Constraint::Length(3), // heatmap
+            Constraint::Length(4), // heatmap (keys, wpm, accuracy)
             Constraint::Length(1),
             Constraint::Length(2), // biases
             Constraint::Fill(1),
@@ -107,7 +118,7 @@ impl Widget for FocusBar<'_> {
                 Style::new().fg(speed_color(ms)),
             ));
             spans.push(Span::styled(
-                format!(" {ms:.0}ms   "),
+                format!(" {:.0}wpm   ", ms_to_wpm(ms)),
                 Style::new().fg(Color::DarkGray),
             ));
         }
@@ -184,7 +195,8 @@ impl Widget for LessonText<'_> {
     }
 }
 
-/// a-z heatmap of population-weighted intrinsic key speeds.
+/// a-z heatmap of population-weighted intrinsic key speeds (as WPM) and
+/// per-key accuracy.
 pub struct KeyHeatmap<'a> {
     pub model: &'a Model,
     pub corpus: &'a Corpus,
@@ -193,18 +205,30 @@ pub struct KeyHeatmap<'a> {
 impl Widget for KeyHeatmap<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let title = Line::from(Span::styled(
-            "key speed, ms/transition (green=fast, red=slow):",
+            "per key: wpm and accuracy % (green=good, red=needs work):",
             Style::new().fg(Color::DarkGray),
         ));
-        let mut keys: Vec<Span> = Vec::with_capacity(26);
-        let mut vals: Vec<Span> = Vec::with_capacity(26);
+        let mut keys: Vec<Span> = Vec::with_capacity(27);
+        let mut wpms: Vec<Span> = Vec::with_capacity(27);
+        let mut accs: Vec<Span> = Vec::with_capacity(27);
+        keys.push(Span::styled("     ", Style::new().fg(Color::DarkGray)));
+        wpms.push(Span::styled("wpm  ", Style::new().fg(Color::DarkGray)));
+        accs.push(Span::styled("acc  ", Style::new().fg(Color::DarkGray)));
         for c in 'a'..='z' {
             let ms = self.model.key_speed(c, &self.corpus.digram_freqs);
-            let style = Style::new().fg(speed_color(ms));
-            keys.push(Span::styled(format!("{c}   "), style));
-            vals.push(Span::styled(format!("{ms:<4.0}"), style));
+            let acc = self.model.key_accuracy(c, &self.corpus.digram_freqs);
+            keys.push(Span::styled(format!("{c}   "), Style::new().fg(speed_color(ms))));
+            wpms.push(Span::styled(
+                format!("{:<4.0}", ms_to_wpm(ms)),
+                Style::new().fg(speed_color(ms)),
+            ));
+            accs.push(Span::styled(
+                format!("{:<4.0}", 100.0 * acc),
+                Style::new().fg(accuracy_color(acc)),
+            ));
         }
-        Paragraph::new(vec![title, Line::from(keys), Line::from(vals)]).render(area, buf);
+        Paragraph::new(vec![title, Line::from(keys), Line::from(wpms), Line::from(accs)])
+            .render(area, buf);
     }
 }
 
