@@ -123,7 +123,8 @@ rotation. The current focus pairs and their speeds are shown live in the UI.
 
 ## UI
 
-- header — normalized + raw WPM and accuracy
+- header — normalized + raw WPM and accuracy, with the per-lesson change in
+  normalized WPM and accuracy shown on the row below
 - lesson line — green/red feedback, red cursor on an unresolved mistake
 - errors — live counts by kind (extra / skipped / typo / swap) and the last event
 - focus — the digrams currently being targeted, with their speeds

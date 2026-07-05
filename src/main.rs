@@ -47,6 +47,8 @@ struct App {
     session: Session,
     rng: rand::rngs::ThreadRng,
     dirty: bool,
+    last_delta_wpm: f64,
+    last_delta_acc: f64,
 }
 
 impl App {
@@ -54,18 +56,34 @@ impl App {
         let corpus = Corpus::load();
         let model = load_model();
         let mut rng = rand::rng();
-        let session = Session::new(corpus.generate_lesson(&model, WORDS_PER_LESSON, &mut rng));
-        App { corpus, model, session, rng, dirty: true }
+        let session = Session::new(
+            corpus.generate_lesson(&model, WORDS_PER_LESSON, &mut rng),
+            &model,
+            &corpus.digram_freqs,
+        );
+        App {
+            corpus,
+            model,
+            session,
+            rng,
+            dirty: true,
+            last_delta_wpm: 0.0,
+            last_delta_acc: 0.0,
+        }
     }
 
     fn next_lesson(&mut self) {
         self.model.recenter_biases();
         save_model(&self.model);
-        self.session = Session::new(self.corpus.generate_lesson(
+
+        (self.last_delta_wpm, self.last_delta_acc) =
+            self.session.normalized_deltas(&self.model, &self.corpus.digram_freqs);
+
+        self.session = Session::new(
+            self.corpus.generate_lesson(&self.model, WORDS_PER_LESSON, &mut self.rng),
             &self.model,
-            WORDS_PER_LESSON,
-            &mut self.rng,
-        ));
+            &self.corpus.digram_freqs,
+        );
     }
 
     /// Returns false when the app should exit.
@@ -114,7 +132,16 @@ fn main() -> std::io::Result<()> {
             // Draw only when state changed; ratatui's buffer diff then writes
             // only the cells that differ, avoiding full-screen repaints.
             if app.dirty {
-                terminal.draw(|f| ui::draw(f, &app.session, &app.model, &app.corpus))?;
+                terminal.draw(|f| {
+                    ui::draw(
+                        f,
+                        &app.session,
+                        &app.model,
+                        &app.corpus,
+                        app.last_delta_wpm,
+                        app.last_delta_acc,
+                    )
+                })?;
                 app.dirty = false;
             }
             if event::poll(Duration::from_millis(100))? && !app.handle_event(event::read()?) {

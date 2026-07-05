@@ -11,6 +11,7 @@
 //! - wrong `w == n`, then `n2`      -> omission (`e` was skipped)
 
 use crate::model::{Model, PAUSE_THRESHOLD_MS};
+use std::collections::HashMap;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,10 +52,13 @@ pub struct Session {
     // Session-raw stats (actual keystrokes, unnormalized).
     session_chars: u64,
     session_ms: f64,
+    // Normalized model scores at the start of this lesson.
+    start_wpm: f64,
+    start_acc: f64,
 }
 
 impl Session {
-    pub fn new(lesson: String) -> Self {
+    pub fn new(lesson: String, model: &Model, freqs: &HashMap<(char, char), f64>) -> Self {
         let chars: Vec<char> = lesson.chars().collect();
         let n = chars.len();
         Session {
@@ -71,6 +75,8 @@ impl Session {
             last_key: None,
             session_chars: 0,
             session_ms: 0.0,
+            start_wpm: model.normalized_wpm(freqs),
+            start_acc: model.normalized_accuracy(freqs),
         }
     }
 
@@ -245,11 +251,23 @@ impl Session {
         }
         (self.session_chars as f64 / 5.0) / (self.session_ms / 60_000.0)
     }
+
+    /// Change in normalized WPM and accuracy since this lesson started.
+    pub fn normalized_deltas(&self, model: &Model, freqs: &HashMap<(char, char), f64>) -> (f64, f64) {
+        (
+            model.normalized_wpm(freqs) - self.start_wpm,
+            model.normalized_accuracy(freqs) - self.start_acc,
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn session(lesson: &str) -> Session {
+        Session::new(lesson.into(), &Model::default(), &HashMap::new())
+    }
 
     fn feed(session: &mut Session, model: &mut Model, s: &str) {
         for c in s.chars() {
@@ -260,7 +278,7 @@ mod tests {
     #[test]
     fn classifies_insertion() {
         let mut m = Model::default();
-        let mut s = Session::new("cat".into());
+        let mut s = session("cat");
         feed(&mut s, &mut m, "cxat"); // extra 'x' before 'a'
         assert_eq!(s.insertions, 1);
         assert_eq!(s.errors(), 1);
@@ -272,7 +290,7 @@ mod tests {
     #[test]
     fn classifies_omission() {
         let mut m = Model::default();
-        let mut s = Session::new("cats".into());
+        let mut s = session("cats");
         feed(&mut s, &mut m, "cts"); // skipped the 'a', kept going
         assert_eq!(s.omissions, 1);
         assert!(s.done());
@@ -283,7 +301,7 @@ mod tests {
     #[test]
     fn classifies_reversal() {
         let mut m = Model::default();
-        let mut s = Session::new("cat".into());
+        let mut s = session("cat");
         feed(&mut s, &mut m, "cta"); // 'a' and 't' typed in swapped order
         assert_eq!(s.reversals, 1);
         assert_eq!(s.errors(), 1);
@@ -297,7 +315,7 @@ mod tests {
         let mut m = Model::default();
         // 't' typed in place of 'a' happens to equal the next expected char;
         // the repeated 't' disambiguates it as a substitution, not a skip.
-        let mut s = Session::new("cat".into());
+        let mut s = session("cat");
         feed(&mut s, &mut m, "ctt");
         assert_eq!(s.substitutions, 1);
         assert_eq!(s.omissions, 0);
@@ -309,7 +327,7 @@ mod tests {
     #[test]
     fn classifies_substitution() {
         let mut m = Model::default();
-        let mut s = Session::new("cat".into());
+        let mut s = session("cat");
         feed(&mut s, &mut m, "cxt"); // typed 'x' in place of 'a', moved on
         assert_eq!(s.substitutions, 1);
         assert!(s.done());
@@ -323,7 +341,7 @@ mod tests {
         // committed as a substitution and the cursor advances instead of
         // parking, so the second is pending against the *next* position.
         let mut m = Model::default();
-        let mut s = Session::new("cat".into());
+        let mut s = session("cat");
         feed(&mut s, &mut m, "cq"); // 'q' mismatches 'a', now pending
         assert_eq!(s.pos, 1);
         feed(&mut s, &mut m, "z"); // second unclassifiable key
@@ -338,7 +356,7 @@ mod tests {
     #[test]
     fn backspace_clears_pending_mismatch() {
         let mut m = Model::default();
-        let mut s = Session::new("cat".into());
+        let mut s = session("cat");
         feed(&mut s, &mut m, "cq");
         assert!(s.pending.is_some());
         s.handle_backspace();
@@ -351,11 +369,30 @@ mod tests {
     #[test]
     fn errors_feed_pair_accuracy() {
         let mut m = Model::default();
-        let mut s = Session::new("cat".into());
+        let mut s = session("cat");
         feed(&mut s, &mut m, "cxt"); // substitution at the c->a transition
         let acc_ca = m.pair_accuracy('c', 'a');
         let acc_at = m.pair_accuracy('a', 't');
         assert!(acc_ca < acc_at, "c->a should be less accurate ({acc_ca} vs {acc_at})");
         assert!(s.raw_accuracy() < 1.0);
+    }
+
+    #[test]
+    fn deltas_track_normalized_change() {
+        let mut m = Model::default();
+        let freqs = HashMap::from([(('a', 'b'), 0.5), (('b', 'a'), 0.5)]);
+        let s = Session::new("ab".into(), &m, &freqs);
+
+        // Speed the model up; normalized WPM should rise.
+        for _ in 0..50 {
+            m.observe('a', 'b', 100.0);
+            m.observe('b', 'a', 100.0);
+        }
+        m.recenter_biases();
+
+        let (dwpm, dacc) = s.normalized_deltas(&m, &freqs);
+        assert!(dwpm > 0.0, "wpm delta should be positive after speeding up");
+        // Accuracy prior is high; no errors were recorded, so it should rise slightly.
+        assert!(dacc >= 0.0, "accuracy delta should be non-negative with no errors");
     }
 }
