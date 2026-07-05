@@ -18,6 +18,10 @@ const LR_FLOOR: f64 = 0.05;
 const LR_BIAS: f64 = 0.02;
 /// Pseudo-count of baseline prior blended into estimates for display/scheduling.
 const PRIOR_N: f64 = 3.0;
+/// Prior accuracy blended into per-pair accuracy estimates.
+const ACC_PRIOR: f64 = 0.97;
+/// Pseudo-count for the accuracy prior.
+const ACC_PRIOR_N: f64 = 10.0;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PairStat {
@@ -25,11 +29,17 @@ pub struct PairStat {
     pub s: f64,
     /// Number of observations.
     pub n: u32,
+    /// Correct attempts at this transition (serde default for migration).
+    #[serde(default)]
+    pub ok: u32,
+    /// Errored attempts at this transition.
+    #[serde(default)]
+    pub err: u32,
 }
 
 impl Default for PairStat {
     fn default() -> Self {
-        PairStat { s: BASELINE_MS, n: 0 }
+        PairStat { s: BASELINE_MS, n: 0, ok: 0, err: 0 }
     }
 }
 
@@ -111,6 +121,39 @@ impl Model {
 
     pub fn pair_count(&self, a: char, b: char) -> u32 {
         self.pairs.get(&pair_key(a, b)).map_or(0, |st| st.n)
+    }
+
+    /// Record whether an attempt at the transition a->b was typed correctly.
+    /// Errors of any kind (extra key, skip, substitution) count against the
+    /// transition into the expected character.
+    pub fn record_attempt(&mut self, a: char, b: char, correct: bool) {
+        let stat = self.pairs.entry(pair_key(a, b)).or_default();
+        if correct {
+            stat.ok = stat.ok.saturating_add(1);
+        } else {
+            stat.err = stat.err.saturating_add(1);
+        }
+    }
+
+    /// Prior-blended accuracy estimate for a transition in [0, 1].
+    pub fn pair_accuracy(&self, a: char, b: char) -> f64 {
+        let (ok, err) = self
+            .pairs
+            .get(&pair_key(a, b))
+            .map_or((0.0, 0.0), |st| (st.ok as f64, st.err as f64));
+        (ok + ACC_PRIOR * ACC_PRIOR_N) / (ok + err + ACC_PRIOR_N)
+    }
+
+    /// Population-frequency-weighted accuracy: invariant to how hard the
+    /// currently presented material is (same normalization as WPM).
+    pub fn normalized_accuracy(&self, freqs: &HashMap<(char, char), f64>) -> f64 {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for (&(a, b), &f) in freqs {
+            num += f * self.pair_accuracy(a, b);
+            den += f;
+        }
+        if den > 0.0 { num / den } else { ACC_PRIOR }
     }
 
     /// Remove gauge freedom: biases are only identifiable up to a global

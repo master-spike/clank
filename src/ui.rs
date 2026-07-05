@@ -21,28 +21,63 @@ fn speed_color(ms: f64) -> Color {
 
 /// Top-level frame composition: lays out and renders all components.
 pub fn draw(frame: &mut Frame, session: &Session, model: &Model, corpus: &Corpus) {
-    let [header, _, lesson, _, focus, _, heatmap, _, biases, _, footer] = Layout::vertical([
-        Constraint::Length(1), // header
-        Constraint::Length(1),
-        Constraint::Length(4), // lesson (wraps)
-        Constraint::Length(1),
-        Constraint::Length(1), // focus pairs
-        Constraint::Length(1),
-        Constraint::Length(3), // heatmap
-        Constraint::Length(1),
-        Constraint::Length(2), // biases
-        Constraint::Fill(1),
-        Constraint::Length(1), // footer
-    ])
-    .horizontal_margin(1)
-    .areas(frame.area());
+    let [header, _, lesson, _, errors, focus, _, heatmap, _, biases, _, footer] =
+        Layout::vertical([
+            Constraint::Length(1), // header
+            Constraint::Length(1),
+            Constraint::Length(4), // lesson (wraps)
+            Constraint::Length(1),
+            Constraint::Length(1), // error readout
+            Constraint::Length(1), // focus pairs
+            Constraint::Length(1),
+            Constraint::Length(3), // heatmap
+            Constraint::Length(1),
+            Constraint::Length(2), // biases
+            Constraint::Fill(1),
+            Constraint::Length(1), // footer
+        ])
+        .horizontal_margin(1)
+        .areas(frame.area());
 
     frame.render_widget(StatsBar { session, model, corpus }, header);
     frame.render_widget(LessonText { session }, lesson);
+    frame.render_widget(ErrorBar { session }, errors);
     frame.render_widget(FocusBar { model, corpus }, focus);
     frame.render_widget(KeyHeatmap { model, corpus }, heatmap);
     frame.render_widget(BiasReadout { model }, biases);
     frame.render_widget(Footer, footer);
+}
+
+/// Real-time error feedback: what kind of mistake just happened, plus
+/// session totals by kind.
+pub struct ErrorBar<'a> {
+    pub session: &'a Session,
+}
+
+impl Widget for ErrorBar<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let s = self.session;
+        let mut spans = vec![Span::styled("errors: ", Style::new().fg(Color::DarkGray))];
+        spans.push(Span::raw(format!(
+            "extra {}  skipped {}  typo {}   ",
+            s.insertions, s.omissions, s.substitutions
+        )));
+        if let Some(ev) = &s.last_error {
+            let desc = match ev.kind {
+                crate::session::ErrorKind::Insertion => {
+                    format!("last: extra '{}' before '{}'", ev.got, ev.expected)
+                }
+                crate::session::ErrorKind::Omission => {
+                    format!("last: skipped '{}'", ev.expected)
+                }
+                crate::session::ErrorKind::Substitution => {
+                    format!("last: typo '{}' for '{}'", ev.got, ev.expected)
+                }
+            };
+            spans.push(Span::styled(desc, Style::new().fg(Color::Yellow)));
+        }
+        Paragraph::new(Line::from(spans)).render(area, buf);
+    }
 }
 
 /// The digrams currently being targeted by the lesson scheduler, with their
@@ -96,7 +131,12 @@ impl Widget for StatsBar<'_> {
             )),
             Span::styled("(normalized)", Style::new().fg(Color::DarkGray)),
             Span::raw(format!("   raw {:5.1}", self.session.raw_wpm())),
-            Span::raw(format!("   errors {}", self.session.errors)),
+            Span::raw(format!(
+                "   acc {:5.1}% ",
+                100.0 * self.model.normalized_accuracy(&self.corpus.digram_freqs)
+            )),
+            Span::styled("(normalized)", Style::new().fg(Color::DarkGray)),
+            Span::raw(format!("   raw {:5.1}%", 100.0 * self.session.raw_accuracy())),
             Span::raw(format!("   obs {}", self.model.total_obs)),
         ]);
         Paragraph::new(line).render(area, buf);
@@ -123,7 +163,12 @@ impl Widget for LessonText<'_> {
                         Style::new().fg(Color::Red).underlined()
                     }
                 } else if i == s.pos {
-                    Style::new().fg(Color::Black).bg(Color::White)
+                    if s.pending.is_some() {
+                        // Unresolved mismatch: cursor turns red.
+                        Style::new().fg(Color::White).bg(Color::Red)
+                    } else {
+                        Style::new().fg(Color::Black).bg(Color::White)
+                    }
                 } else {
                     Style::new().fg(Color::DarkGray)
                 };
