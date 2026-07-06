@@ -43,9 +43,7 @@ Run the tests with `cargo test`.
 For the `k`-th observation of key `i` followed by key `j`, the raw
 inter-keystroke interval is decomposed as
 
-```
-T_ijk = s_ij + b_i − b_j + ε_k
-```
+$$T_{ijk} = s_{ij} + b_i - b_j + \varepsilon_k$$
 
 - `s_ij` — the intrinsic time cost of the transition `i → j` (what we care about)
 - `b_i`  — the delay bias of key `i` (a habit of pressing it late or early)
@@ -78,9 +76,7 @@ Reported WPM is **not** your raw session speed. It is the model's expected
 speed over the *population* distribution of English digrams (built from the
 word list, Zipf-weighted by rank):
 
-```
-wpm = 60000 / (5 × Σ f_ab · s_ab)     f = population digram frequency
-```
+$$\text{wpm} = \frac{60000}{5 \times \sum_{ab} f_{ab} \cdot s_{ab}} \quad f = \text{population digram frequency}$$
 
 Because the weights are fixed population frequencies rather than whatever the
 scheduler happens to be showing you, your score doesn't drop when clank feeds
@@ -113,10 +109,9 @@ both its speed and its error rate (an error is charged a fixed time penalty,
 and sparse pairs inherit the accuracy of their worse key as a prior — so a
 letter you mistype often gets drilled even if its pairs are individually rare):
 
-```
-effective cost = speed + error rate × penalty
-payoff = √(population frequency) × effective-cost deficit vs your mean × uncertainty boost
-```
+$$\text{effective cost} = \text{speed} + \text{error rate} \times \text{penalty}$$
+
+$$\text{payoff} = \sqrt{\text{population frequency}} \times \text{effective-cost deficit vs your mean} \times \text{uncertainty boost}$$
 
 Lessons are sampled as a mix: 50% words containing a current focus pair (via
 an inverted digram → word index, skewed toward common words), 30% weighted by
