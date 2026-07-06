@@ -127,6 +127,11 @@ impl Model {
         self.pairs.get(&pair_key(a, b)).map_or(0, |st| st.n)
     }
 
+    /// True if this pair has any speed observations or accuracy attempts.
+    pub fn has_pair(&self, a: char, b: char) -> bool {
+        self.pairs.contains_key(&pair_key(a, b))
+    }
+
     /// Record whether an attempt at the transition a->b was typed correctly.
     /// Errors of any kind (extra key, skip, substitution) count against the
     /// transition into the expected character.

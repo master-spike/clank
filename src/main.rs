@@ -9,8 +9,15 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use session::Session;
 use std::path::PathBuf;
 use std::time::Duration;
+use ui::StatsView;
 
 const WORDS_PER_LESSON: usize = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppMode {
+    Typing,
+    Stats,
+}
 
 fn state_path() -> PathBuf {
     let mut p = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -49,6 +56,9 @@ struct App {
     dirty: bool,
     last_delta_wpm: f64,
     last_delta_acc: f64,
+    mode: AppMode,
+    matrix_scroll: (u16, u16),
+    stats_view: StatsView,
 }
 
 impl App {
@@ -69,6 +79,9 @@ impl App {
             dirty: true,
             last_delta_wpm: 0.0,
             last_delta_acc: 0.0,
+            mode: AppMode::Typing,
+            matrix_scroll: (0, 0),
+            stats_view: StatsView::Wpm,
         }
     }
 
@@ -94,21 +107,36 @@ impl App {
             Event::Key(key)
                 if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
             {
+                // Global quit shortcuts work in every mode.
+                if key.code == KeyCode::Esc
+                    || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+                {
+                    return false;
+                }
                 self.dirty = true;
-                match key.code {
-                    KeyCode::Esc => return false,
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return false;
-                    }
-                    KeyCode::Tab => self.next_lesson(),
-                    KeyCode::Backspace => self.session.handle_backspace(),
-                    KeyCode::Char(c) => {
-                        self.session.handle_char(c, &mut self.model);
-                        if self.session.done() {
-                            self.next_lesson();
+                match self.mode {
+                    AppMode::Stats => match key.code {
+                        KeyCode::Char('<') | KeyCode::Char('>') => self.mode = AppMode::Typing,
+                        KeyCode::Char('n') => self.stats_view = self.stats_view.next(),
+                        KeyCode::Char('p') => self.stats_view = self.stats_view.prev(),
+                        KeyCode::Left => self.matrix_scroll.0 = self.matrix_scroll.0.saturating_sub(1),
+                        KeyCode::Right => self.matrix_scroll.0 = self.matrix_scroll.0.saturating_add(1),
+                        KeyCode::Up => self.matrix_scroll.1 = self.matrix_scroll.1.saturating_sub(1),
+                        KeyCode::Down => self.matrix_scroll.1 = self.matrix_scroll.1.saturating_add(1),
+                        _ => self.dirty = false,
+                    },
+                    AppMode::Typing => match key.code {
+                        KeyCode::Char('<') | KeyCode::Char('>') => self.mode = AppMode::Stats,
+                        KeyCode::Tab => self.next_lesson(),
+                        KeyCode::Backspace => self.session.handle_backspace(),
+                        KeyCode::Char(c) => {
+                            self.session.handle_char(c, &mut self.model);
+                            if self.session.done() {
+                                self.next_lesson();
+                            }
                         }
-                    }
-                    _ => self.dirty = false,
+                        _ => self.dirty = false,
+                    },
                 }
             }
             Event::Resize(_, _) => self.dirty = true,
@@ -136,16 +164,22 @@ fn main() -> std::io::Result<()> {
             // Draw only when state changed; ratatui's buffer diff then writes
             // only the cells that differ, avoiding full-screen repaints.
             if app.dirty {
-                terminal.draw(|f| {
-                    ui::draw(
-                        f,
-                        &app.session,
-                        &app.model,
-                        &app.corpus,
-                        app.last_delta_wpm,
-                        app.last_delta_acc,
-                    )
-                })?;
+                if app.mode == AppMode::Stats {
+                    terminal.draw(|f| {
+                        ui::draw_stats(f, &app.model, &app.corpus, app.matrix_scroll, app.stats_view)
+                    })?;
+                } else {
+                    terminal.draw(|f| {
+                        ui::draw(
+                            f,
+                            &app.session,
+                            &app.model,
+                            &app.corpus,
+                            app.last_delta_wpm,
+                            app.last_delta_acc,
+                        )
+                    })?;
+                }
                 app.dirty = false;
             }
             if event::poll(Duration::from_millis(100))? && !app.handle_event(event::read()?) {

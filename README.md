@@ -26,6 +26,8 @@ Keys:
 | `a`–`z`     | type the shown lesson                    |
 | `Backspace` | clear an unresolved mistake / step back  |
 | `Tab`       | skip to a fresh lesson                   |
+| `<` / `>`   | toggle full digram matrix stats screen   |
+| `n` / `p`   | cycle stats view: WPM / accuracy         |
 | `Esc`       | quit (model is saved)                    |
 
 Your model is persisted to your platform data directory (on Linux,
