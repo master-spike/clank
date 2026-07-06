@@ -183,9 +183,10 @@ impl Session {
     /// Accept `c` as the correct char at the cursor. Records timing and an
     /// accuracy success only when the keystroke chain is intact.
     fn accept(&mut self, c: char, now: Instant, model: &mut Model) {
+        let model_char = |c: char| c.is_ascii_lowercase() || c == ' ';
         if let Some((prev, t0)) = self.last_key {
             let dt = now.duration_since(t0).as_secs_f64() * 1000.0;
-            if prev.is_ascii_lowercase() && c.is_ascii_lowercase() {
+            if model_char(prev) && model_char(c) {
                 if model.observe(prev, c, dt) {
                     self.session_chars += 1;
                     self.session_ms += dt;
@@ -214,11 +215,12 @@ impl Session {
             got,
             expected,
         });
+        let model_char = |c: char| c.is_ascii_lowercase() || c == ' ';
         match kind {
             // A reversal is an ordering failure of the expected->next
             // transition itself (got == next here).
             ErrorKind::Reversal => {
-                if expected.is_ascii_lowercase() && got.is_ascii_lowercase() {
+                if model_char(expected) && model_char(got) {
                     model.record_attempt(expected, got, false);
                 }
             }
@@ -226,7 +228,7 @@ impl Session {
             _ => {
                 if self.pos > 0 {
                     let prev = self.lesson[self.pos - 1];
-                    if prev.is_ascii_lowercase() && expected.is_ascii_lowercase() {
+                    if model_char(prev) && model_char(expected) {
                         model.record_attempt(prev, expected, false);
                     }
                 }
@@ -408,5 +410,25 @@ mod tests {
             dacc >= 0.0,
             "accuracy delta should be non-negative with no errors"
         );
+    }
+
+    #[test]
+    fn observes_space_transitions() {
+        let mut m = Model::default();
+        let mut s = Session::new("a b".into(), &m, &HashMap::new());
+        feed(&mut s, &mut m, "a b");
+        assert!(s.done());
+        assert_eq!(m.pair_count('a', ' '), 1);
+        assert_eq!(m.pair_count(' ', 'b'), 1);
+        assert!(m.pair_count('a', 'b') == 0);
+    }
+
+    #[test]
+    fn records_space_adjacent_errors() {
+        let mut m = Model::default();
+        let mut s = Session::new("a bc".into(), &m, &HashMap::new());
+        feed(&mut s, &mut m, "abc"); // skipped the space
+        assert_eq!(s.omissions, 1);
+        assert!(m.pair_attempts('a', ' ').1 > 0);
     }
 }

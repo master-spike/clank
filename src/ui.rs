@@ -141,8 +141,9 @@ impl Widget for FocusBar<'_> {
         }
         for ((a, b), _) in &focus {
             let ms = self.model.pair_speed(*a, *b);
+            let glyph = |c: char| if c == ' ' { '␣' } else { c };
             spans.push(Span::styled(
-                format!("{a}{b}"),
+                format!("{}{}", glyph(*a), glyph(*b)),
                 Style::new().fg(speed_color(ms)),
             ));
             spans.push(Span::styled(

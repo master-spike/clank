@@ -44,6 +44,12 @@ impl Corpus {
         // The list is frequency-ranked; approximate word frequency by Zipf's
         // law (1/rank) to build a population digram distribution, and build
         // an inverted index for targeted lesson generation.
+        //
+        // Lessons are words joined by single spaces, so the population
+        // distribution also includes cross-word transitions: the last letter
+        // of a word -> space, and space -> the first letter of the next word.
+        // Each boundary is shared between two words, so these transitions are
+        // weighted at half the word weight.
         let mut digram_freqs: HashMap<(char, char), f64> = HashMap::new();
         let mut index: HashMap<(char, char), Vec<u32>> = HashMap::new();
         for (rank, word) in words.iter().enumerate() {
@@ -55,6 +61,16 @@ impl Corpus {
                 let entry = index.entry(key).or_default();
                 if entry.last() != Some(&(rank as u32)) {
                     entry.push(rank as u32);
+                }
+            }
+            if let (Some(&first), Some(&last)) = (chars.first(), chars.last()) {
+                let boundary_w = w * 0.5;
+                for key in [(last, ' '), (' ', first)] {
+                    *digram_freqs.entry(key).or_insert(0.0) += boundary_w;
+                    let entry = index.entry(key).or_default();
+                    if entry.last() != Some(&(rank as u32)) {
+                        entry.push(rank as u32);
+                    }
                 }
             }
         }
@@ -226,6 +242,21 @@ mod tests {
         assert!(c.words.len() > 5000);
         let total: f64 = c.digram_freqs.values().sum();
         assert!((total - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn corpus_includes_space_digrams() {
+        let c = Corpus::load();
+        assert!(
+            c.digram_freqs.contains_key(&('e', ' ')),
+            "letter->space pair missing"
+        );
+        assert!(
+            c.digram_freqs.contains_key(&(' ', 't')),
+            "space->letter pair missing"
+        );
+        assert!(c.index.contains_key(&('e', ' ')));
+        assert!(c.index.contains_key(&(' ', 't')));
     }
 
     #[test]
